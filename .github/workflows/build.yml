@@ -70,8 +70,15 @@ jobs:
           $content = [regex]::Replace($content, $pattern, $replacement, 1)
           Set-Content -Path $path -Value $content -Encoding utf8
 
-      - name: Compilar un solo EXE
-        run: pyinstaller --noconfirm --clean --onefile --windowed --name OpenAnime --collect-submodules yt_dlp main.py
+      - name: Verificar icono
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "OpenAnime.ico")) {
+            throw "No se encontró OpenAnime.ico en la raíz del repositorio. Súbelo junto a main.py o ajusta la ruta en el workflow."
+          }
+
+      - name: Compilar un solo EXE con icono
+        run: pyinstaller --noconfirm --clean --onefile --windowed --icon=OpenAnime.ico --name OpenAnime --collect-submodules yt_dlp main.py
 
       - name: Calcular hash SHA-256
         shell: pwsh
