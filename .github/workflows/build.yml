@@ -1,0 +1,51 @@
+name: Compilar y publicar OpenAnime
+
+on:
+  push:
+    tags: ["v*"]        # al subir un tag como v1.0.1 se compila y publica una release
+  workflow_dispatch:     # también se puede lanzar a mano desde la pestaña Actions
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v4
+
+      - name: Instalar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Compilar con PyInstaller
+        run: pyinstaller --noconfirm --clean --windowed --name OpenAnime --collect-submodules yt_dlp main.py
+
+      - name: Comprimir y calcular hash
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/OpenAnime/* -DestinationPath OpenAnime-Windows.zip
+          (Get-FileHash OpenAnime-Windows.zip -Algorithm SHA256).Hash | Out-File OpenAnime-Windows.zip.sha256
+
+      - name: Guardar artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenAnime-Windows
+          path: OpenAnime-Windows.zip*
+
+      - name: Publicar release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            OpenAnime-Windows.zip
+            OpenAnime-Windows.zip.sha256
+          generate_release_notes: true
