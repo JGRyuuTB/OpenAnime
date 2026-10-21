@@ -42,7 +42,7 @@ ACCENT = "#60CDFF"
 CREATOR = "Kyuu TB Tech"
 CHANNEL_URL = "https://youtube.com/@kyuutbtech?si=u3_8Z3iJPxLfVfPO"
 LATANIME_URL = "https://latanime.org"
-VERSION = "1.0.0"
+VERSION = "1.1.6"
 GITHUB_REPO = "JGRyuuTB/OpenAnime"
 
 ICONS = {
