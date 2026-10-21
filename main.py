@@ -1,5 +1,47 @@
 import sys, subprocess, importlib.util
 
+# Modo auxiliar integrado: el mismo ejecutable se copia temporalmente y se
+# vuelve a lanzar para reemplazar el .exe principal cuando ya no esté en uso.
+def _run_embedded_updater():
+    import os, time, shutil, subprocess
+    from pathlib import Path
+    args = sys.argv
+    if len(args) < 5 or args[1] != "--openanime-apply-update":
+        return False
+    target, staged, parent_pid = Path(args[2]), Path(args[3]), int(args[4])
+    try:
+        for _ in range(120):
+            try:
+                os.kill(parent_pid, 0)
+                time.sleep(1)
+            except OSError:
+                break
+        if not staged.is_file() or staged.stat().st_size < 1_000_000:
+            raise RuntimeError("El archivo descargado no parece un ejecutable válido.")
+        backup = target.with_suffix(target.suffix + ".bak")
+        if target.exists():
+            shutil.copy2(target, backup)
+        os.replace(str(staged), str(target))
+        subprocess.Popen([str(target)], cwd=str(target.parent), close_fds=True)
+        try:
+            Path(sys.executable).unlink(missing_ok=True)
+        except Exception:
+            pass
+    except Exception:
+        # Intenta recuperar la copia previa si el reemplazo no pudo completarse.
+        try:
+            backup = target.with_suffix(target.suffix + ".bak")
+            if backup.exists():
+                shutil.copy2(backup, target)
+                subprocess.Popen([str(target)], cwd=str(target.parent), close_fds=True)
+        except Exception:
+            pass
+    return True
+
+
+if _run_embedded_updater():
+    raise SystemExit(0)
+
 
 def _ensure_deps():
     needed = {"requests": "requests", "bs4": "beautifulsoup4", "PySide6": "PySide6", "yt_dlp": "yt-dlp"}
@@ -11,7 +53,7 @@ def _ensure_deps():
 if not getattr(sys, "frozen", False):
     _ensure_deps()
 
-import re, json, base64, time, ctypes, os
+import re, json, base64, time, ctypes, os, shutil
 from pathlib import Path
 from urllib.parse import urljoin, quote_plus
 
@@ -19,13 +61,13 @@ import requests
 from bs4 import BeautifulSoup
 from PySide6.QtCore import (Qt, QObject, Signal, Slot, QRunnable, QThreadPool, QUrl, QSize, QTimer,
                             QPropertyAnimation, QEasingCurve, QByteArray, QAbstractAnimation, QPoint)
-from PySide6.QtGui import QPixmap, QColor, QPainter, QIcon, QDesktopServices
+from PySide6.QtGui import QPixmap, QColor, QPainter, QIcon, QDesktopServices, QGuiApplication
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
-    QApplication, QWidget, QMainWindow, QHBoxLayout, QVBoxLayout, QLabel, QPushButton,
+    QApplication, QWidget, QMainWindow, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QSizePolicy,
     QScrollArea, QStackedWidget, QLineEdit, QFrame, QGridLayout, QButtonGroup, QDialog,
     QListWidget, QListWidgetItem, QGraphicsDropShadowEffect, QGraphicsOpacityEffect,
-    QProgressBar, QFileDialog,
+    QProgressBar, QFileDialog, QMessageBox,
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import (
@@ -187,7 +229,7 @@ def info_card(ic, color, title, text, buttons=(), extra=None):
 
 
 QSS = f"""
-* {{ font-family: 'Segoe UI Variable Text','Segoe UI','Inter',sans-serif; font-size: 14px; color: #ffffff; }}
+* {{ font-family: 'Segoe UI Variable Text','Segoe UI','Inter',sans-serif; font-size: 13px; color: #ffffff; }}
 QMainWindow, QWidget#root {{ background: #202020; }}
 QWidget#content {{ background: #272727; border-top-left-radius: 8px; border: 1px solid #333333; }}
 QScrollArea {{ border: none; background: transparent; }}
@@ -198,13 +240,13 @@ QScrollBar::handle:vertical:hover {{ background: #8a8a8a; }}
 QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; }}
 QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
 QLabel {{ background: transparent; }}
-QLabel#title {{ font-size: 28px; font-weight: 600; }}
-QLabel#subtitle {{ color: #c5c5c5; font-size: 15px; }}
+QLabel#title {{ font-size: 24px; font-weight: 600; }}
+QLabel#subtitle {{ color: #c5c5c5; font-size: 13px; }}
 QLabel#muted {{ color: #9d9d9d; }}
 QLabel#section {{ font-size: 20px; font-weight: 600; }}
 QToolTip {{ background: #3a3a3a; color: #fff; border: 1px solid #4a4a4a; padding: 5px 8px; border-radius: 4px; }}
-QPushButton {{ background: #2f2f2f; border: 1px solid #3a3a3a; border-radius: 6px; padding: 8px 16px; }}
-QPushButton:hover {{ background: #3a3a3a; border-color: #4a4a4a; }}
+QPushButton {{ background: #2f2f2f; border: 1px solid #3a3a3a; border-radius: 6px; padding: 7px 11px; }}
+QPushButton:hover {{ background: #3a3a3a; border-color: {ACCENT}; }}
 QPushButton:pressed {{ background: #2a2a2a; color: #c5c5c5; }}
 QPushButton:disabled {{ color: #6a6a6a; background: #2a2a2a; border-color: #303030; }}
 QPushButton#accent {{ background: {ACCENT}; color: #000000; border: 1px solid {ACCENT}; font-weight: 600; }}
@@ -213,7 +255,7 @@ QPushButton#accent:pressed {{ background: #3da3d3; }}
 QPushButton#accent:disabled {{ background: #3a4a52; color: #7a8a92; border-color: #3a4a52; }}
 QPushButton#server {{ border-radius: 15px; padding: 6px 16px; }}
 QPushButton#server:checked {{ background: {ACCENT}; color: #000; border-color: {ACCENT}; font-weight: 600; }}
-QPushButton#nav {{ background: transparent; border: none; text-align: left; padding: 11px 16px;
+QPushButton#nav {{ background: transparent; border: none; text-align: left; padding: 9px 13px;
     border-radius: 6px; margin: 1px 8px; }}
 QPushButton#nav:hover {{ background: #2d2d2d; }}
 QPushButton#nav:checked {{ background: #333333; font-weight: 600; }}
@@ -227,7 +269,10 @@ QPushButton#iconbtn {{ padding: 7px; border-radius: 6px; background: transparent
 QPushButton#iconbtn:hover {{ background: #3f3f3f; }}
 QLineEdit {{ background: #323232; border: 1px solid #3d3d3d; border-bottom: 2px solid #8a8a8a;
     border-radius: 6px; padding: 8px 12px; selection-background-color: {ACCENT}; selection-color: #000; }}
-QLineEdit:focus {{ border-bottom: 2px solid {ACCENT}; background: #1c1c1c; }}
+QLineEdit:focus {{ border: 1px solid {ACCENT}; border-bottom: 2px solid {ACCENT}; background: #1c1c1c; }}
+QScrollArea, QFrame#card, QDialog {{ outline: none; }}
+QProgressBar {{ border-radius: 5px; }}
+QProgressBar::chunk {{ border-radius: 5px; }}
 QFrame#card {{ background: #2f2f2f; border: 1px solid #383838; border-radius: 8px; }}
 QFrame#card:hover {{ background: #3a3a3a; border: 1px solid {ACCENT}; }}
 QFrame#row {{ background: #2f2f2f; border: 1px solid #383838; border-radius: 8px; }}
@@ -784,7 +829,7 @@ class FadeStack(QStackedWidget):
 
 class PosterCard(QFrame):
     clicked = Signal(str)
-    W, CH = 176, 322
+    W, CH = 164, 296
 
     def __init__(self, item):
         super().__init__()
@@ -797,15 +842,15 @@ class PosterCard(QFrame):
         lay.setContentsMargins(8, 8, 8, 8)
         lay.setSpacing(8)
         self.img = QLabel()
-        self.img.setFixedSize(self.W - 16, 234)
+        self.img.setFixedSize(self.W - 16, 214)
         self.img.setAlignment(Qt.AlignCenter)
         self.img.setStyleSheet("background:#1f1f1f;border-radius:6px;color:#666;font-size:40px;")
         self.img.setText((item["title"][:1] or "?").upper())
         self.lbl = QLabel(item["title"])
         self.lbl.setWordWrap(True)
-        self.lbl.setFixedHeight(54)
+        self.lbl.setFixedHeight(48)
         self.lbl.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-        self.lbl.setStyleSheet("font-weight:600;font-size:13px;")
+        self.lbl.setStyleSheet("font-weight:600;font-size:12px;")
         lay.addWidget(self.img)
         lay.addWidget(self.lbl)
         self.sh = QGraphicsDropShadowEffect(self)
@@ -966,6 +1011,7 @@ def make_header(text, sub=None):
     box.setSpacing(2)
     t = QLabel(text)
     t.setObjectName("title")
+    t.setWordWrap(True)
     box.addWidget(t)
     if sub:
         s = QLabel(sub)
@@ -1115,7 +1161,7 @@ class HomePage(QWidget):
     def __init__(self):
         super().__init__()
         v = QVBoxLayout(self)
-        v.setContentsMargins(28, 22, 18, 10)
+        v.setContentsMargins(20, 16, 14, 8)
         v.addLayout(make_header("Inicio", "Series destacadas y últimos episodios"))
         v.addSpacing(6)
         tabs = QHBoxLayout()
@@ -1177,7 +1223,7 @@ class DirectoryPage(QWidget):
         self.page_no, self.query, self.loaded, self.busy = 1, "", False, False
         self.seen = set()
         v = QVBoxLayout(self)
-        v.setContentsMargins(28, 22, 18, 10)
+        v.setContentsMargins(20, 16, 14, 8)
         top = QHBoxLayout()
         top.addLayout(make_header(title, sub))
         top.addStretch(1)
@@ -1249,7 +1295,7 @@ class FavoritesPage(QWidget):
     def __init__(self):
         super().__init__()
         v = QVBoxLayout(self)
-        v.setContentsMargins(28, 22, 18, 10)
+        v.setContentsMargins(20, 16, 14, 8)
         v.addLayout(make_header("Favoritos", "Tus series guardadas"))
         v.addSpacing(6)
         self.grid = GridView()
@@ -1270,7 +1316,7 @@ class HistoryPage(QWidget):
     def __init__(self):
         super().__init__()
         v = QVBoxLayout(self)
-        v.setContentsMargins(28, 22, 18, 10)
+        v.setContentsMargins(20, 16, 14, 8)
         v.addLayout(make_header("Historial", "Últimos episodios vistos"))
         v.addSpacing(6)
         self.list = QListWidget()
@@ -1355,7 +1401,7 @@ class DownloadsPage(QWidget):
         super().__init__()
         self.rows = {}
         v = QVBoxLayout(self)
-        v.setContentsMargins(28, 22, 18, 10)
+        v.setContentsMargins(20, 16, 14, 8)
         top = QHBoxLayout()
         top.addLayout(make_header("Descargas", "Los episodios se guardan en tu carpeta de videos"))
         top.addStretch(1)
@@ -1431,34 +1477,119 @@ def parse_ver(v):
 
 
 def check_update():
+    """Consulta la última release y busca un .exe instalable para Windows."""
     if "/" not in GITHUB_REPO or GITHUB_REPO.startswith("TU_USUARIO"):
         return None
-    r = requests.get(f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
-                     headers={"User-Agent": UA, "Accept": "application/vnd.github+json"}, timeout=15)
+    r = requests.get(
+        f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
+        headers={"User-Agent": UA, "Accept": "application/vnd.github+json"}, timeout=12
+    )
+    if r.status_code == 404:
+        return {"error": "No se encontró una release pública en el repositorio configurado."}
     r.raise_for_status()
     data = r.json()
     tag = data.get("tag_name", "")
-    return {"tag": tag, "url": data.get("html_url", ""), "newer": parse_ver(tag) > parse_ver(VERSION)}
+    assets = data.get("assets", []) or []
+    exe_asset = next((a for a in assets if a.get("name", "").lower() in ("openanime.exe", "openanime-windows.exe")), None)
+    py_asset = next((a for a in assets if a.get("name", "").lower() == "main.py"), None)
+    return {
+        "tag": tag,
+        "url": data.get("html_url", f"https://github.com/{GITHUB_REPO}/releases/latest"),
+        "newer": parse_ver(tag) > parse_ver(VERSION),
+        "asset": exe_asset if getattr(sys, "frozen", False) else py_asset,
+        "assets": assets,
+        "notes": (data.get("body") or "").strip(),
+    }
+
+
+def _stage_exe_update(asset):
+    """Descarga y verifica el nuevo ejecutable sin tocar el .exe actual."""
+    import hashlib
+    if not getattr(sys, "frozen", False):
+        raise RuntimeError("La actualización automática del ejecutable solo funciona en la versión .exe.")
+    if not asset or not asset.get("browser_download_url"):
+        raise RuntimeError("La release debe incluir OpenAnime.exe como asset.")
+    target = Path(sys.executable).resolve()
+    staged = target.with_name(target.stem + ".update.exe")
+    digest = hashlib.sha256()
+    total = 0
+    response = requests.get(asset["browser_download_url"], headers={"User-Agent": UA}, timeout=60, stream=True)
+    response.raise_for_status()
+    try:
+        with staged.open("wb") as f:
+            for chunk in response.iter_content(1024 * 1024):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > 500 * 1024 * 1024:
+                    raise RuntimeError("La actualización supera el límite de 500 MB.")
+                digest.update(chunk)
+                f.write(chunk)
+        if total < 1_000_000:
+            raise RuntimeError("La descarga está incompleta o no es un ejecutable válido.")
+        expected = (asset.get("digest") or "").lower()
+        if expected.startswith("sha256:") and digest.hexdigest().lower() != expected.split(":", 1)[1]:
+            raise RuntimeError("La verificación SHA-256 de la actualización falló.")
+        return target, staged
+    except Exception:
+        staged.unlink(missing_ok=True)
+        raise
+    finally:
+        response.close()
+
+
+def _launch_embedded_replacer(target, staged):
+    """Lanza una copia temporal del propio .exe en modo actualizador."""
+    import tempfile
+    helper = Path(tempfile.gettempdir()) / f"OpenAnimeUpdater-{os.getpid()}.exe"
+    shutil.copy2(sys.executable, helper)
+    subprocess.Popen(
+        [str(helper), "--openanime-apply-update", str(target), str(staged), str(os.getpid())],
+        cwd=str(target.parent), close_fds=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    )
 
 
 def notify_update(res, manual=False):
     if res is None:
         if manual:
-            toast("Configura GITHUB_REPO en main.py para activar las actualizaciones", "info")
+            QMessageBox.information(MAIN, "Actualizaciones", "No se pudo consultar GitHub. Revisa la configuración del repositorio.")
         return
-    if res["newer"]:
-        toast(f"Nueva versión disponible: {res['tag']}  (Créditos > Buscar actualizaciones)", "download")
-        if manual and res["url"]:
+    if res.get("error"):
+        if manual:
+            QMessageBox.warning(MAIN, "Actualizaciones", res["error"])
+        return
+    if res.get("newer"):
+        asset = res.get("asset")
+        is_exe = bool(getattr(sys, "frozen", False))
+        kind = "Se descargará y aplicará desde OpenAnime." if (asset and is_exe) else "Esta release no incluye un ejecutable compatible; se abrirá GitHub."
+        answer = QMessageBox.question(
+            MAIN, f"OpenAnime {res['tag']} disponible",
+            f"Tu versión: {VERSION}\nNueva versión: {res['tag']}\n\n{kind}\n\n¿Quieres actualizar ahora?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
+        ) if (manual or not STORE.d.get("skip_update_prompts")) else QMessageBox.No
+        if answer != QMessageBox.Yes:
+            return
+        if asset and is_exe:
+            try:
+                target, staged = _stage_exe_update(asset)
+                _launch_embedded_replacer(target, staged)
+                QMessageBox.information(MAIN, "Actualización preparada", "OpenAnime se cerrará y abrirá la nueva versión automáticamente.")
+                MAIN.close()
+            except Exception as e:
+                QMessageBox.warning(MAIN, "No se pudo actualizar", f"{e}\n\nSe abrirá la página de la release.")
+                QDesktopServices.openUrl(QUrl(res["url"]))
+        else:
             QDesktopServices.openUrl(QUrl(res["url"]))
     elif manual:
-        toast("Ya tienes la última versión")
+        QMessageBox.information(MAIN, "Actualizaciones", f"Ya tienes la última versión ({VERSION}).")
 
 
 class CreditsPage(QWidget):
     def __init__(self):
         super().__init__()
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(28, 22, 18, 10)
+        outer.setContentsMargins(20, 16, 14, 8)
         outer.addLayout(make_header("Créditos", "Las personas y proyectos que hacen posible OpenAnime"))
         outer.addSpacing(6)
         sc = QScrollArea()
@@ -1511,7 +1642,7 @@ class DetailPage(QWidget):
         super().__init__()
         self.data = None
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(28, 22, 18, 10)
+        outer.setContentsMargins(20, 16, 14, 8)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -1720,11 +1851,18 @@ class PlayerPage(QWidget):
         super().__init__()
         self.data = None
         self.v = QVBoxLayout(self)
-        self.v.setContentsMargins(28, 18, 18, 10)
+        self.v.setContentsMargins(20, 14, 14, 8)
         top = QHBoxLayout()
         top.setSpacing(8)
         self.title = QLabel("")
         self.title.setObjectName("section")
+        self.title.setMinimumWidth(0)
+        self.title.setMaximumHeight(48)
+        self.title.setWordWrap(True)
+        self.title.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.title.setStyleSheet("font-size:16px;font-weight:700;padding:2px 4px;")
+        self.title.setToolTip("Título del episodio")
+        self.title.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
         self.lst = btn("Episodios", "list")
         self.dl = btn("Descargar", "download")
         self.prev = btn("Anterior", "prev")
@@ -1735,6 +1873,9 @@ class PlayerPage(QWidget):
         self.dl.clicked.connect(self._download)
         top.addWidget(self.title, 1)
         for b in (self.lst, self.dl, self.prev, self.next):
+            b.setMinimumWidth(0)
+            b.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+            b.setMaximumWidth(126)
             top.addWidget(b)
         self.v.addLayout(top)
         self.srv_box = QHBoxLayout()
@@ -1838,8 +1979,17 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(QIcon(app_icon_pixmap(64)))
-        self.resize(1320, 820)
-        self.setMinimumSize(1000, 640)
+        # Abrir en un tamaño cómodo y respetar la resolución disponible.
+        screen = QGuiApplication.primaryScreen()
+        available = screen.availableGeometry() if screen else None
+        if available:
+            w = min(1120, max(820, available.width() - 80))
+            h = min(720, max(560, available.height() - 70))
+            self.resize(w, h)
+            self.setMinimumSize(min(780, available.width()), min(520, available.height()))
+        else:
+            self.resize(1120, 720)
+            self.setMinimumSize(780, 520)
         root = QWidget()
         root.setObjectName("root")
         self.setCentralWidget(root)
@@ -1848,7 +1998,7 @@ class MainWindow(QMainWindow):
         h.setSpacing(0)
 
         nav = QWidget()
-        nav.setFixedWidth(230)
+        nav.setFixedWidth(205)
         nv = QVBoxLayout(nav)
         nv.setContentsMargins(0, 16, 0, 12)
         nv.setSpacing(0)
