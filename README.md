@@ -154,11 +154,7 @@ La disponibilidad de los contenidos y las opciones de reproducción o descarga d
 
 ## 🙏 Créditos
 
-- **Python** — lenguaje de programación.
-- **PySide6 / Qt** — interfaz gráfica y vista web integrada.
-- **PyInstaller** — generación del ejecutable.
-- **yt-dlp** — funciones compatibles de extracción y gestión de medios.
-- Autores y mantenedores de las bibliotecas utilizadas.
+- **[LatAnime](https://latanime.org/)**
 
 ---
 
