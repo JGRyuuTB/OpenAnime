@@ -28,7 +28,9 @@ from PySide6.QtWidgets import (
     QProgressBar, QFileDialog,
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
+from PySide6.QtWebEngineCore import (
+    QWebEnginePage, QWebEngineSettings, QWebEngineUrlRequestInterceptor
+)
 
 APP_NAME = "OpenAnime"
 BASE = "https://latanime.org"
@@ -42,7 +44,7 @@ ACCENT = "#60CDFF"
 CREATOR = "Kyuu TB Tech"
 CHANNEL_URL = "https://youtube.com/@kyuutbtech?si=u3_8Z3iJPxLfVfPO"
 LATANIME_URL = "https://latanime.org"
-VERSION = "1.1.6"
+VERSION = "1.1.0"
 GITHUB_REPO = "JGRyuuTB/OpenAnime"
 
 ICONS = {
@@ -639,16 +641,62 @@ class DownloadJob(QRunnable):
 
         def attempt(target, referer):
             opts = {
-                "outtmpl": tmpl, "format": "best[ext=mp4]/best", "quiet": True, "no_warnings": True,
-                "noprogress": True, "retries": 3, "fragment_retries": 5, "nocheckcertificate": True,
-                "concurrent_fragment_downloads": 4, "progress_hooks": [hook],
+                "outtmpl": tmpl,
+                # Prioriza MP4 + audio M4A; evita elegir WebM cuando exista MP4.
+                # Para combinar pistas separadas/remuxear se necesita FFmpeg.
+                "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]",
+                "merge_output_format": "mp4",
+                "postprocessors": [{
+                    "key": "FFmpegVideoRemuxer",
+                    "preferedformat": "mp4",
+                }],
+                "quiet": True,
+                "no_warnings": True,
+                "noprogress": True,
+                "retries": 5,
+                "fragment_retries": 10,
+                "file_access_retries": 3,
+                "extractor_retries": 3,
+                "concurrent_fragment_downloads": 8,
+                "continuedl": True,
+                "overwrites": False,
+                "windowsfilenames": True,
+                "progress_hooks": [hook],
                 "http_headers": {"User-Agent": UA, "Referer": referer},
             }
             with yt_dlp.YoutubeDL(opts) as y:
                 info = y.extract_info(target, download=True)
                 if info and info.get("entries"):
-                    info = info["entries"][0]
-                return y.prepare_filename(info)
+                    info = next((entry for entry in info["entries"] if entry), None)
+                if not info:
+                    raise RuntimeError("El servidor no devolvió información del video")
+                # yt-dlp puede devolver el nombre anterior al remux. Comprueba
+                # primero el archivo final y no inventa una extensión MP4.
+                prepared = Path(y.prepare_filename(info))
+                candidates = [
+                    prepared.with_suffix(".mp4"),
+                    prepared,
+                    prepared.with_suffix(".mkv"),
+                    prepared.with_suffix(".webm"),
+                ]
+                for candidate in candidates:
+                    if candidate.is_file() and candidate.stat().st_size > 0:
+                        if candidate.suffix.lower() != ".mp4":
+                            raise RuntimeError(
+                                "El servidor no ofrece MP4 y FFmpeg no pudo convertirlo. "
+                                "Instala FFmpeg para remuxear el video."
+                            )
+                        return str(candidate)
+                # Algunos extractores informan la ruta real en requested_downloads.
+                for item in info.get("requested_downloads") or []:
+                    filename = item.get("filepath")
+                    if filename and Path(filename).is_file():
+                        candidate = Path(filename)
+                        if candidate.suffix.lower() == ".mp4":
+                            return str(candidate)
+                raise RuntimeError(
+                    "No se encontró el MP4 final. Comprueba que FFmpeg esté instalado."
+                )
 
         errs = []
         origin = re.match(r"https?://[^/]+/", embed)
@@ -1624,8 +1672,42 @@ class DetailPage(QWidget):
             toast("Añadido a favoritos" if STORE.is_fav(self.data["url"]) else "Quitado de favoritos", "star")
 
 
+class AdBlocker(QWebEngineUrlRequestInterceptor):
+    """Bloqueo ligero de anuncios y rastreadores en el reproductor integrado.
+
+    No es un bloqueador completo: los anuncios servidos desde el mismo dominio
+    que el video pueden requerir reglas adicionales y bloquear dominios puede
+    afectar a algunos reproductores.
+    """
+    BLOCKED_HOSTS = (
+        "doubleclick.net", "googlesyndication.com", "googleadservices.com",
+        "adservice.google.com", "adnxs.com", "popads.net", "popcash.net",
+        "propellerads.com", "exoclick.com", "trafficjunky.net",
+        "juicyads.com", "onclickads.net", "adsterra.com", "taboola.com",
+        "outbrain.com", "criteo.com", "imasdk.googleapis.com",
+    )
+    BLOCKED_PATHS = (
+        "/ads?", "/adserver", "/advertising", "/banner-ad", "/popunder",
+        "/popup.php", "/tracking/", "/analytics.js",
+    )
+
+    def interceptRequest(self, info):
+        try:
+            url = info.requestUrl().toString().lower()
+            host = info.requestUrl().host().lower()
+            if any(host == d or host.endswith("." + d) for d in self.BLOCKED_HOSTS):
+                info.block(True)
+                return
+            if any(part in url for part in self.BLOCKED_PATHS):
+                info.block(True)
+        except Exception:
+            # Un fallo del filtro no debe interrumpir la reproducción.
+            return
+
+
 class VideoPage(QWebEnginePage):
     def createWindow(self, _type):
+        # Evita que los anuncios abran ventanas nuevas.
         return None
 
 
@@ -1660,7 +1742,12 @@ class PlayerPage(QWidget):
         self.srv_box.addStretch(1)
         self.v.addLayout(self.srv_box)
         self.web = QWebEngineView()
-        self.web.setPage(VideoPage(self.web))
+        page = VideoPage(self.web)
+        self.web.setPage(page)
+        self.ad_blocker = AdBlocker(self)
+        # El interceptor debe conservarse como atributo para evitar que Python
+        # lo destruya mientras Chromium todavía lo está usando.
+        page.profile().setUrlRequestInterceptor(self.ad_blocker)
         s = self.web.settings()
         s.setAttribute(QWebEngineSettings.FullScreenSupportEnabled, True)
         s.setAttribute(QWebEngineSettings.PlaybackRequiresUserGesture, False)
