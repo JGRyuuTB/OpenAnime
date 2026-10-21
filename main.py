@@ -1,8 +1,3 @@
-"""
-OpenAnime - aplicación de código abierto (gratuita) con estilo Fluent / WinUI 3
-Copyright (C) 2026 Kyuu TB Tech - Licencia GNU GPL v3.0 o posterior (ver LICENSE)
-Ejecutar:  python main.py   (instala las dependencias automáticamente)
-"""
 import sys, subprocess, importlib.util
 
 
@@ -48,10 +43,8 @@ CREATOR = "Kyuu TB Tech"
 CHANNEL_URL = "https://youtube.com/@kyuutbtech?si=u3_8Z3iJPxLfVfPO"
 LATANIME_URL = "https://latanime.org"
 VERSION = "1.0.0"
-# Cambia esto por tu repositorio de GitHub, por ejemplo "kyuutbtech/OpenAnime"
 GITHUB_REPO = "JGRyuuTB/OpenAnime"
 
-# ------------------------------------------------------------------ iconos (SVG vectorial)
 ICONS = {
     "youtube": "M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z",
     "verified": "M23 12l-2.44-2.79.34-3.69-3.61-.82-1.89-3.2L12 2.96 8.6 1.5 6.71 4.69 3.1 5.5l.34 3.7L1 12l2.44 2.79-.34 3.7 3.61.82L8.6 22.5l3.4-1.47 3.4 1.46 1.89-3.19 3.61-.82-.34-3.69L23 12zm-12.91 4.72l-3.8-3.81 1.48-1.48 2.32 2.33 5.85-5.87 1.48 1.48-7.33 7.35z",
@@ -247,7 +240,6 @@ QListWidget::item:selected {{ background: #3a3a3a; color: #ffffff; }}
 QLabel#toast {{ background: #3b3b3b; border: 1px solid #505050; border-radius: 10px; padding: 11px 20px; }}
 """
 
-# ------------------------------------------------------------------ hilos / utilidades
 class Invoker(QObject):
     sig = Signal(object, object, bool)
 
@@ -351,7 +343,6 @@ def fade_in(widget, ms=280, delay=0):
         go()
 
 
-# ------------------------------------------------------------------ parseo del sitio
 def poster_from_img(img):
     if not img:
         return None
@@ -500,14 +491,12 @@ def parse_episode(html, url):
 
 
 def split_title(full):
-    """'Anime Latino - 3' -> ('Anime Latino', 'Episodio 3')"""
     m = re.match(r"^(.*?)\s*-\s*([\d.]+)\s*$", full or "")
     if m:
         return m.group(1).strip(), f"Episodio {m.group(2)}"
     return full or "Anime", "Episodio"
 
 
-# ------------------------------------------------------------------ almacenamiento
 class Store:
     def __init__(self):
         self.d = {"favs": {}, "history": [], "hide_welcome": False, "dl_dir": ""}
@@ -539,7 +528,6 @@ class Store:
         self.save()
 
 
-# ------------------------------------------------------------------ descargas
 class Cancelled(Exception):
     pass
 
@@ -551,7 +539,7 @@ class Task:
         Task._n += 1
         self.id = Task._n
         self.anime, self.label, self.url = anime, label, url
-        self.state = "queued"  # queued run done error cancel
+        self.state = "queued"
         self.text = "En cola"
         self.pct = 0.0
         self.path = None
@@ -559,7 +547,7 @@ class Task:
 
     @property
     def title(self):
-        return f"{self.anime} — {self.label}"
+        return f"{self.anime} - {self.label}"
 
 
 PRIORITY = ["voe", "mixdrop", "streamtape", "doodstream", "dood", "mp4upload", "streamwish", "filemoon",
@@ -600,7 +588,7 @@ class DownloadJob(QRunnable):
         try:
             if t.cancel:
                 raise Cancelled()
-            self.emit("run", "Preparando…", 0)
+            self.emit("run", "Preparando...", 0)
             d = parse_episode(http_get(t.url), t.url)
             players = order_players(d["players"])
             if not players:
@@ -609,7 +597,7 @@ class DownloadJob(QRunnable):
             for p in players:
                 if t.cancel:
                     raise Cancelled()
-                self.emit("run", f"Probando {p['name']}…", t.pct)
+                self.emit("run", f"Probando {p['name']}...", t.pct)
                 try:
                     path = self._try(p["url"])
                     self.emit("done", "Completado", 100, path)
@@ -646,7 +634,7 @@ class DownloadJob(QRunnable):
                 sp = d.get("speed")
                 txt = f"Descargando {pct:.0f}%"
                 if sp:
-                    txt += f"  ·  {sp / 1048576:.1f} MB/s"
+                    txt += f"  -  {sp / 1048576:.1f} MB/s"
                 self.emit("run", txt, pct)
 
         def attempt(target, referer):
@@ -736,7 +724,6 @@ class DownloadManager(QObject):
         self.tasks = [t for t in self.tasks if t.state in ("queued", "run")]
 
 
-# ------------------------------------------------------------------ widgets base
 class FadeStack(QStackedWidget):
     def setCurrentWidget(self, w):
         if w is self.currentWidget():
@@ -980,7 +967,6 @@ class Toast(QLabel):
             self.hide()
 
 
-# ------------------------------------------------------------------ bienvenida
 class WelcomeDialog(QDialog):
     def __init__(self, parent):
         super().__init__(parent, Qt.Dialog | Qt.FramelessWindowHint)
@@ -1074,7 +1060,6 @@ class WelcomeDialog(QDialog):
         a.start(QAbstractAnimation.DeleteWhenStopped)
 
 
-# ------------------------------------------------------------------ páginas
 class HomePage(QWidget):
     open_anime = Signal(str)
     open_episode = Signal(str)
@@ -1116,7 +1101,7 @@ class HomePage(QWidget):
             return
         self.loaded = True
         self.grid.clear()
-        self.grid.set_info("Cargando…")
+        self.grid.set_info("Cargando...")
 
         def done(html):
             self.grid.set_info("")
@@ -1149,7 +1134,7 @@ class DirectoryPage(QWidget):
         top.addLayout(make_header(title, sub))
         top.addStretch(1)
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Buscar anime…")
+        self.search.setPlaceholderText("Buscar anime...")
         self.search.addAction(icon("search", "#9d9d9d"), QLineEdit.LeadingPosition)
         self.search.setClearButtonEnabled(True)
         self.search.setFixedWidth(300)
@@ -1189,7 +1174,7 @@ class DirectoryPage(QWidget):
         if self.busy:
             return
         self.busy = True
-        self.grid.set_info("Cargando…")
+        self.grid.set_info("Cargando...")
         url = self._url()
 
         def done(html):
@@ -1228,7 +1213,7 @@ class FavoritesPage(QWidget):
         items = [{"url": u, "title": d["title"], "poster": d.get("poster")} for u, d in STORE.d["favs"].items()]
         self.grid.add_items(items)
         if not items:
-            self.grid.set_info("Aún no tienes favoritos. Abre una serie y pulsa «Favorito».")
+            self.grid.set_info("Aún no tienes favoritos. Abre una serie y pulsa Favorito.")
 
 
 class HistoryPage(QWidget):
@@ -1414,7 +1399,7 @@ def notify_update(res, manual=False):
             toast("Configura GITHUB_REPO en main.py para activar las actualizaciones", "info")
         return
     if res["newer"]:
-        toast(f"Nueva versión disponible: {res['tag']}  (Créditos → Buscar actualizaciones)", "download")
+        toast(f"Nueva versión disponible: {res['tag']}  (Créditos > Buscar actualizaciones)", "download")
         if manual and res["url"]:
             QDesktopServices.openUrl(QUrl(res["url"]))
     elif manual:
@@ -1462,7 +1447,7 @@ class CreditsPage(QWidget):
         outer.addWidget(sc, 1)
 
     def _check(self):
-        toast("Buscando actualizaciones…", "info")
+        toast("Buscando actualizaciones...", "info")
         run_async(check_update, lambda r: notify_update(r, True),
                   lambda e: toast("No se pudo comprobar las actualizaciones", "info"))
 
@@ -1544,7 +1529,7 @@ class DetailPage(QWidget):
 
     def load(self, url):
         self.data = None
-        self.title.setText("Cargando…")
+        self.title.setText("Cargando...")
         self.sub.setText("")
         self.meta.setText("")
         self.syn.setText("")
@@ -1561,7 +1546,7 @@ class DetailPage(QWidget):
                 meta.insert(0, d["status"])
             if d["genres"]:
                 meta.append("Géneros: " + ", ".join(d["genres"]))
-            self.meta.setText("   •   ".join(meta))
+            self.meta.setText("   -   ".join(meta))
             self.syn.setText(d["synopsis"])
             self._update_fav()
             if d["poster"]:
@@ -1641,7 +1626,7 @@ class DetailPage(QWidget):
 
 class VideoPage(QWebEnginePage):
     def createWindow(self, _type):
-        return None  # bloquea ventanas emergentes / publicidad
+        return None
 
 
 class PlayerPage(QWidget):
@@ -1715,7 +1700,7 @@ class PlayerPage(QWidget):
     def load(self, url):
         self.stop()
         self.cur_url = url
-        self.title.setText("Cargando…")
+        self.title.setText("Cargando...")
         self.msg.setText("")
         for b in self.srv_btns:
             b.setParent(None)
@@ -1761,7 +1746,6 @@ class PlayerPage(QWidget):
         self.msg.setText("Si un servidor no carga, prueba con otro de la lista.")
 
 
-# ------------------------------------------------------------------ ventana principal
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
