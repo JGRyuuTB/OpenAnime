@@ -55,7 +55,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
 
-      - name: Aplicar versión al menú de OpenAnime
+      - name: Aplicar versión al menú y al ejecutable
         shell: pwsh
         env:
           APP_VERSION: ${{ steps.version.outputs.version }}
@@ -70,74 +70,28 @@ jobs:
           $content = [regex]::Replace($content, $pattern, $replacement, 1)
           Set-Content -Path $path -Value $content -Encoding utf8
 
-      - name: Verificar archivos y rutas
+      - name: Verificar icono
         shell: pwsh
         run: |
-          foreach ($file in @("OpenAnime.ico", "installer.iss", "requirements.txt", "main.py")) {
-            if (-not (Test-Path $file)) {
-              throw "Falta el archivo requerido en la raíz del repositorio: $file"
-            }
-          }
-          $issContent = Get-Content "installer.iss" -Raw
-          if ($issContent -match 'C:\\Users\\|MyAppSourceDir') {
-            throw "installer.iss parece contener una ruta local antigua. Reemplázalo por la plantilla corregida que usa Source: ""dist\OpenAnime.exe""."
-          }
-          if ($issContent -notmatch 'Source:\s*"dist\\OpenAnime\.exe"') {
-            throw 'installer.iss debe incluir Source: "dist\OpenAnime.exe".'
+          if (-not (Test-Path "OpenAnime.ico")) {
+            throw "No se encontró OpenAnime.ico en la raíz del repositorio. Súbelo junto a main.py o ajusta la ruta en el workflow."
           }
 
-      - name: Compilar EXE portátil con PyInstaller
+      - name: Compilar un solo EXE con icono
         run: pyinstaller --noconfirm --clean --onefile --windowed --icon=OpenAnime.ico --name OpenAnime --collect-submodules yt_dlp main.py
 
-      - name: Confirmar EXE compilado
+      - name: Calcular hash SHA-256
         shell: pwsh
         run: |
-          if (-not (Test-Path "dist/OpenAnime.exe")) {
-            throw "PyInstaller no generó dist/OpenAnime.exe"
-          }
+          (Get-FileHash dist/OpenAnime.exe -Algorithm SHA256).Hash.ToLower() | Out-File -Encoding ascii dist/OpenAnime.exe.sha256
 
-      - name: Instalar Inno Setup
-        shell: pwsh
-        run: |
-          choco install innosetup --yes --no-progress
-          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          if (-not (Test-Path $iscc)) {
-            $iscc = "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
-          }
-          if (-not (Test-Path $iscc)) {
-            throw "No se encontró ISCC.exe después de instalar Inno Setup."
-          }
-          "ISCC_PATH=$iscc" >> $env:GITHUB_ENV
-
-      - name: Crear instalador oscuro con versión e icono
-        shell: pwsh
-        env:
-          APP_VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          # La versión se inyecta en MyAppVersion; el .iss usa dist\OpenAnime.exe.
-          & "$env:ISCC_PATH" "/DMyAppVersion=$env:APP_VERSION" "installer.iss"
-          if ($LASTEXITCODE -ne 0) {
-            throw "Inno Setup terminó con código $LASTEXITCODE"
-          }
-          if (-not (Test-Path "installer-output/OpenAnime-Setup.exe")) {
-            throw "No se generó installer-output/OpenAnime-Setup.exe"
-          }
-
-      - name: Calcular hashes SHA-256
-        shell: pwsh
-        run: |
-          (Get-FileHash "dist/OpenAnime.exe" -Algorithm SHA256).Hash.ToLower() | Out-File -Encoding ascii "dist/OpenAnime.exe.sha256"
-          (Get-FileHash "installer-output/OpenAnime-Setup.exe" -Algorithm SHA256).Hash.ToLower() | Out-File -Encoding ascii "installer-output/OpenAnime-Setup.exe.sha256"
-
-      - name: Guardar artefactos
+      - name: Guardar artefacto
         uses: actions/upload-artifact@v4
         with:
           name: OpenAnime-Windows-${{ steps.version.outputs.version }}
           path: |
             dist/OpenAnime.exe
             dist/OpenAnime.exe.sha256
-            installer-output/OpenAnime-Setup.exe
-            installer-output/OpenAnime-Setup.exe.sha256
 
       - name: Publicar release
         uses: softprops/action-gh-release@v2
@@ -148,7 +102,5 @@ jobs:
           files: |
             dist/OpenAnime.exe
             dist/OpenAnime.exe.sha256
-            installer-output/OpenAnime-Setup.exe
-            installer-output/OpenAnime-Setup.exe.sha256
           generate_release_notes: true
           fail_on_unmatched_files: true
