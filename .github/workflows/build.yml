@@ -55,7 +55,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
 
-      - name: Aplicar versión al menú y al ejecutable
+      - name: Aplicar versión al menú de OpenAnime
         shell: pwsh
         env:
           APP_VERSION: ${{ steps.version.outputs.version }}
@@ -70,7 +70,7 @@ jobs:
           $content = [regex]::Replace($content, $pattern, $replacement, 1)
           Set-Content -Path $path -Value $content -Encoding utf8
 
-      - name: Verificar archivos necesarios
+      - name: Verificar archivos y rutas
         shell: pwsh
         run: |
           foreach ($file in @("OpenAnime.ico", "installer.iss", "requirements.txt", "main.py")) {
@@ -78,9 +78,23 @@ jobs:
               throw "Falta el archivo requerido en la raíz del repositorio: $file"
             }
           }
+          $issContent = Get-Content "installer.iss" -Raw
+          if ($issContent -match 'C:\\Users\\|MyAppSourceDir') {
+            throw "installer.iss parece contener una ruta local antigua. Reemplázalo por la plantilla corregida que usa Source: ""dist\OpenAnime.exe""."
+          }
+          if ($issContent -notmatch 'Source:\s*"dist\\OpenAnime\.exe"') {
+            throw 'installer.iss debe incluir Source: "dist\OpenAnime.exe".'
+          }
 
       - name: Compilar EXE portátil con PyInstaller
         run: pyinstaller --noconfirm --clean --onefile --windowed --icon=OpenAnime.ico --name OpenAnime --collect-submodules yt_dlp main.py
+
+      - name: Confirmar EXE compilado
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "dist/OpenAnime.exe")) {
+            throw "PyInstaller no generó dist/OpenAnime.exe"
+          }
 
       - name: Instalar Inno Setup
         shell: pwsh
@@ -95,11 +109,12 @@ jobs:
           }
           "ISCC_PATH=$iscc" >> $env:GITHUB_ENV
 
-      - name: Crear instalador oscuro con el icono OpenAnime
+      - name: Crear instalador oscuro con versión e icono
         shell: pwsh
         env:
           APP_VERSION: ${{ steps.version.outputs.version }}
         run: |
+          # La versión se inyecta en MyAppVersion; el .iss usa dist\OpenAnime.exe.
           & "$env:ISCC_PATH" "/DMyAppVersion=$env:APP_VERSION" "installer.iss"
           if ($LASTEXITCODE -ne 0) {
             throw "Inno Setup terminó con código $LASTEXITCODE"
@@ -111,8 +126,8 @@ jobs:
       - name: Calcular hashes SHA-256
         shell: pwsh
         run: |
-          (Get-FileHash dist/OpenAnime.exe -Algorithm SHA256).Hash.ToLower() | Out-File -Encoding ascii dist/OpenAnime.exe.sha256
-          (Get-FileHash installer-output/OpenAnime-Setup.exe -Algorithm SHA256).Hash.ToLower() | Out-File -Encoding ascii installer-output/OpenAnime-Setup.exe.sha256
+          (Get-FileHash "dist/OpenAnime.exe" -Algorithm SHA256).Hash.ToLower() | Out-File -Encoding ascii "dist/OpenAnime.exe.sha256"
+          (Get-FileHash "installer-output/OpenAnime-Setup.exe" -Algorithm SHA256).Hash.ToLower() | Out-File -Encoding ascii "installer-output/OpenAnime-Setup.exe.sha256"
 
       - name: Guardar artefactos
         uses: actions/upload-artifact@v4
