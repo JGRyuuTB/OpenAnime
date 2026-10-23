@@ -70,28 +70,59 @@ jobs:
           $content = [regex]::Replace($content, $pattern, $replacement, 1)
           Set-Content -Path $path -Value $content -Encoding utf8
 
-      - name: Verificar icono
+      - name: Verificar archivos necesarios
         shell: pwsh
         run: |
-          if (-not (Test-Path "OpenAnime.ico")) {
-            throw "No se encontró OpenAnime.ico en la raíz del repositorio. Súbelo junto a main.py o ajusta la ruta en el workflow."
+          foreach ($file in @("OpenAnime.ico", "installer.iss", "requirements.txt", "main.py")) {
+            if (-not (Test-Path $file)) {
+              throw "Falta el archivo requerido en la raíz del repositorio: $file"
+            }
           }
 
-      - name: Compilar un solo EXE con icono
+      - name: Compilar EXE portátil con PyInstaller
         run: pyinstaller --noconfirm --clean --onefile --windowed --icon=OpenAnime.ico --name OpenAnime --collect-submodules yt_dlp main.py
 
-      - name: Calcular hash SHA-256
+      - name: Instalar Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup --yes --no-progress
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            $iscc = "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+          }
+          if (-not (Test-Path $iscc)) {
+            throw "No se encontró ISCC.exe después de instalar Inno Setup."
+          }
+          "ISCC_PATH=$iscc" >> $env:GITHUB_ENV
+
+      - name: Crear instalador oscuro con el icono OpenAnime
+        shell: pwsh
+        env:
+          APP_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          & "$env:ISCC_PATH" "/DMyAppVersion=$env:APP_VERSION" "installer.iss"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Inno Setup terminó con código $LASTEXITCODE"
+          }
+          if (-not (Test-Path "installer-output/OpenAnime-Setup.exe")) {
+            throw "No se generó installer-output/OpenAnime-Setup.exe"
+          }
+
+      - name: Calcular hashes SHA-256
         shell: pwsh
         run: |
           (Get-FileHash dist/OpenAnime.exe -Algorithm SHA256).Hash.ToLower() | Out-File -Encoding ascii dist/OpenAnime.exe.sha256
+          (Get-FileHash installer-output/OpenAnime-Setup.exe -Algorithm SHA256).Hash.ToLower() | Out-File -Encoding ascii installer-output/OpenAnime-Setup.exe.sha256
 
-      - name: Guardar artefacto
+      - name: Guardar artefactos
         uses: actions/upload-artifact@v4
         with:
           name: OpenAnime-Windows-${{ steps.version.outputs.version }}
           path: |
             dist/OpenAnime.exe
             dist/OpenAnime.exe.sha256
+            installer-output/OpenAnime-Setup.exe
+            installer-output/OpenAnime-Setup.exe.sha256
 
       - name: Publicar release
         uses: softprops/action-gh-release@v2
@@ -102,5 +133,7 @@ jobs:
           files: |
             dist/OpenAnime.exe
             dist/OpenAnime.exe.sha256
+            installer-output/OpenAnime-Setup.exe
+            installer-output/OpenAnime-Setup.exe.sha256
           generate_release_notes: true
           fail_on_unmatched_files: true
